@@ -1,0 +1,952 @@
+"""
+BST Visualizer — Final Pro Edition (Merged)
+- Dark professional UI
+- Insert / Search / Delete / Traversals / Min / Max / Successor / Predecessor
+- Properties: height, depth, node count, leaf count
+- Step-by-step explanation log
+- Sliding insert animation (node slides from top to final spot)
+- Search glow highlight (flash)
+- Delete fade-out animation (fade then redraw)
+No external libraries required.
+Author: ChatGPT (customized for your presentation)
+"""
+
+import tkinter as tk
+from tkinter import ttk, messagebox
+import math
+import time
+import random
+
+# ---------------- Configuration / Constants ----------------
+WINDOW_W = 1200
+WINDOW_H = 760
+CANVAS_BG = "#0f1724"        # dark canvas
+PANEL_BG = "#0b1220"         # sidebar dark
+BTN_BG = "#111827"
+BTN_FG = "#E6EEF8"
+TEXT_FG = "#D7FFD7"          # neon green-ish for log
+NODE_FILL = "#0ea5a4"        # teal
+NODE_FILL_ALT = "#60a5fa"    # blue (for highlight flashes)
+NODE_OUTLINE = "#031827"
+NODE_RADIUS = 26
+LEVEL_Y_STEP = 88
+LOG_FONT = ("Consolas", 10)
+
+# Animation tuning (slower / smoother)
+INSERT_STEPS = 44           # frames for insert slide (~1.3s total)
+FRAME_DELAY = 30            # ms per frame -> 44 * 30 = 1320 ms
+SEARCH_STEP_DELAY = 600     # ms per visited node in search
+TRAVERSAL_STEP_DELAY = 700  # ms per node during traversal highlight
+FADE_STEPS = 12             # frames for delete fade (~900ms)
+FADE_DELAY = 75             # ms per fade frame -> 12 * 75 = 900 ms
+FLASH_TIMES = 3
+
+# ---------------- Utility: ToolTip ----------------
+class ToolTip:
+    def __init__(self, widget, text, delay=450):
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self.id = None
+        self.tw = None
+        widget.bind("<Enter>", self.schedule)
+        widget.bind("<Leave>", self.cancel)
+
+    def schedule(self, e=None):
+        self.cancel()
+        self.id = self.widget.after(self.delay, self.show)
+
+    def cancel(self, e=None):
+        if self.id:
+            self.widget.after_cancel(self.id)
+            self.id = None
+        self.hide()
+
+    def show(self):
+        if self.tw:
+            return
+        x = self.widget.winfo_rootx() + 18
+        y = self.widget.winfo_rooty() + 18
+        self.tw = tk.Toplevel(self.widget)
+        self.tw.wm_overrideredirect(True)
+        self.tw.wm_geometry(f"+{x}+{y}")
+        lbl = tk.Label(self.tw, text=self.text, justify=tk.LEFT,
+                       background="#111827", foreground="white", borderwidth=1,
+                       relief="solid", font=("Arial", 9), padx=6, pady=4)
+        lbl.pack()
+
+    def hide(self):
+        if self.tw:
+            try:
+                self.tw.destroy()
+            except:
+                pass
+            self.tw = None
+
+# ---------------- BST Node & Logic ----------------
+class BSTNode:
+    def __init__(self, key):
+        self.key = key
+        self.left = None
+        self.right = None
+        # GUI metadata
+        self.x = 0
+        self.y = 0
+        self.level = 0
+        self.gui_circle = None
+        self.gui_text = None
+
+class BST:
+    def __init__(self):
+        self.root = None
+
+    # Insert returns steps (strings)
+    def insert(self, key):
+        steps = []
+        if self.root is None:
+            self.root = BSTNode(key)
+            steps.append(f"Inserted {key} as root.")
+            return steps
+        cur = self.root
+        while True:
+            steps.append(f"Compare {key} with {cur.key}.")
+            if key < cur.key:
+                steps.append(f"{key} < {cur.key} → go left.")
+                if cur.left is None:
+                    cur.left = BSTNode(key)
+                    steps.append(f"Inserted {key} as left child of {cur.key}.")
+                    break
+                cur = cur.left
+            elif key > cur.key:
+                steps.append(f"{key} > {cur.key} → go right.")
+                if cur.right is None:
+                    cur.right = BSTNode(key)
+                    steps.append(f"Inserted {key} as right child of {cur.key}.")
+                    break
+                cur = cur.right
+            else:
+                steps.append(f"{key} already exists — duplicates ignored.")
+                break
+        return steps
+
+    # Search returns (found_bool, steps)
+    def search(self, key):
+        steps = []
+        cur = self.root
+        while cur:
+            steps.append(f"Compare {key} with {cur.key}.")
+            if key == cur.key:
+                steps.append(f"Found {key}.")
+                return True, steps
+            elif key < cur.key:
+                steps.append(f"{key} < {cur.key} → go left.")
+                cur = cur.left
+            else:
+                steps.append(f"{key} > {cur.key} → go right.")
+                cur = cur.right
+        steps.append(f"{key} not found in tree.")
+        return False, steps
+
+    # Delete returns (ok_bool, steps)
+    def delete(self, key):
+        steps = []
+        parent = None
+        cur = self.root
+        while cur and cur.key != key:
+            steps.append(f"Compare {key} with {cur.key}.")
+            parent = cur
+            if key < cur.key:
+                steps.append(f"{key} < {cur.key} → go left.")
+                cur = cur.left
+            else:
+                steps.append(f"{key} > {cur.key} → go right.")
+                cur = cur.right
+        if cur is None:
+            steps.append(f"{key} not found — cannot delete.")
+            return False, steps
+        steps.append(f"Found node {key} to delete.")
+        # Case 1: leaf
+        if cur.left is None and cur.right is None:
+            steps.append("Node is a leaf. Remove directly.")
+            if parent is None:
+                self.root = None
+            else:
+                if parent.left == cur:
+                    parent.left = None
+                else:
+                    parent.right = None
+            return True, steps
+        # Case 2: one child
+        if cur.left is None or cur.right is None:
+            child = cur.left if cur.left else cur.right
+            steps.append(f"Node has one child ({'left' if cur.left else 'right'}). Replace node with child {child.key}.")
+            if parent is None:
+                self.root = child
+            else:
+                if parent.left == cur:
+                    parent.left = child
+                else:
+                    parent.right = child
+            return True, steps
+        # Case 3: two children
+        steps.append("Node has two children. Find inorder successor (smallest in right subtree).")
+        succ_parent = cur
+        succ = cur.right
+        while succ.left:
+            succ_parent = succ
+            succ = succ.left
+        steps.append(f"Inorder successor is {succ.key}. Copy successor key to target and delete successor node.")
+        cur.key = succ.key
+        # Delete successor
+        if succ_parent.left == succ:
+            succ_parent.left = succ.right
+        else:
+            succ_parent.right = succ.right
+        return True, steps
+
+    # traversal node lists (objects)
+    def inorder_nodes(self):
+        res = []
+        def dfs(n):
+            if not n: return
+            dfs(n.left)
+            res.append(n)
+            dfs(n.right)
+        dfs(self.root)
+        return res
+
+    def inorder_vals(self):
+        return [n.key for n in self.inorder_nodes()]
+
+    def preorder_vals(self):
+        res = []
+        def dfs(n):
+            if not n: return
+            res.append(n.key)
+            dfs(n.left); dfs(n.right)
+        dfs(self.root)
+        return res
+
+    def postorder_vals(self):
+        res = []
+        def dfs(n):
+            if not n: return
+            dfs(n.left); dfs(n.right)
+            res.append(n.key)
+        dfs(self.root)
+        return res
+
+    def level_order_vals(self):
+        if not self.root: return []
+        q = [self.root]
+        res = []
+        while q:
+            node = q.pop(0)
+            res.append(node.key)
+            if node.left: q.append(node.left)
+            if node.right: q.append(node.right)
+        return res
+
+    # min and max
+    def find_min(self):
+        steps = []
+        cur = self.root
+        if not cur:
+            steps.append("Tree empty.")
+            return None, steps
+        while cur.left:
+            steps.append(f"Go left from {cur.key}.")
+            cur = cur.left
+        steps.append(f"Minimum is {cur.key}.")
+        return cur.key, steps
+
+    def find_max(self):
+        steps = []
+        cur = self.root
+        if not cur:
+            steps.append("Tree empty.")
+            return None, steps
+        while cur.right:
+            steps.append(f"Go right from {cur.key}.")
+            cur = cur.right
+        steps.append(f"Maximum is {cur.key}.")
+        return cur.key, steps
+
+    # successor & predecessor
+    def find_successor(self, key):
+        steps = []
+        cur = self.root
+        succ = None
+        while cur:
+            if key < cur.key:
+                succ = cur
+                steps.append(f"{key} < {cur.key} → go left. Potential successor = {cur.key}.")
+                cur = cur.left
+            elif key > cur.key:
+                steps.append(f"{key} > {cur.key} → go right.")
+                cur = cur.right
+            else:
+                if cur.right:
+                    tmp = cur.right
+                    while tmp.left:
+                        steps.append(f"Go left from {tmp.key}.")
+                        tmp = tmp.left
+                    succ = tmp
+                    steps.append(f"Successor found = {tmp.key}.")
+                break
+        if succ:
+            steps.append(f"Successor of {key} is {succ.key}.")
+            return succ.key, steps
+        steps.append(f"No successor for {key}.")
+        return None, steps
+
+    def find_predecessor(self, key):
+        steps = []
+        cur = self.root
+        pred = None
+        while cur:
+            if key > cur.key:
+                pred = cur
+                steps.append(f"{key} > {cur.key} → go right. Potential predecessor = {cur.key}.")
+                cur = cur.right
+            elif key < cur.key:
+                steps.append(f"{key} < {cur.key} → go left.")
+                cur = cur.left
+            else:
+                if cur.left:
+                    tmp = cur.left
+                    while tmp.right:
+                        steps.append(f"Go right from {tmp.key}.")
+                        tmp = tmp.right
+                    pred = tmp
+                    steps.append(f"Predecessor found = {tmp.key}.")
+                break
+        if pred:
+            steps.append(f"Predecessor of {key} is {pred.key}.")
+            return pred.key, steps
+        steps.append(f"No predecessor for {key}.")
+        return None, steps
+
+    # height, depth, counts
+    def height(self, node=None):
+        if node is None:
+            node = self.root
+        if not node: return -1
+        return 1 + max(self.height(node.left), self.height(node.right))
+
+    def depth(self, key):
+        steps = []
+        cur = self.root
+        d = 0
+        while cur:
+            steps.append(f"Compare {key} with {cur.key}.")
+            if key == cur.key:
+                steps.append(f"Found {key} at depth {d}.")
+                return d, steps
+            elif key < cur.key:
+                steps.append(f"{key} < {cur.key} → go left.")
+                cur = cur.left
+            else:
+                steps.append(f"{key} > {cur.key} → go right.")
+                cur = cur.right
+            d += 1
+        steps.append(f"{key} not found.")
+        return None, steps
+
+    def count_nodes(self):
+        def c(n):
+            if not n: return 0
+            return 1 + c(n.left) + c(n.right)
+        return c(self.root)
+
+    def count_leaves(self):
+        def c(n):
+            if not n: return 0
+            if not n.left and not n.right:
+                return 1
+            return c(n.left) + c(n.right)
+        return c(self.root)
+
+# ---------------- Visualizer App ----------------
+class VisualBSTApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("BST Visualizer — Final Pro + Animations")
+        self.geometry(f"{WINDOW_W}x{WINDOW_H}")
+        self.configure(bg=CANVAS_BG)
+        self.minsize(1000, 640)
+
+        self.bst = BST()
+        self.animating = False
+
+        self._build_ui()
+
+        # Preload demo values
+        for v in [50, 30, 70, 20, 40, 60, 80]:
+            self.bst.insert(v)
+        self.draw_tree(initial=True)
+
+    def _build_ui(self):
+        # Left sidebar
+        sidebar = tk.Frame(self, bg=PANEL_BG, width=300)
+        sidebar.pack(side=tk.LEFT, fill=tk.Y)
+        sidebar.pack_propagate(False)
+
+        title = tk.Label(sidebar, text="BST Visualizer", font=("Arial", 18, "bold"), bg=PANEL_BG, fg="white")
+        title.pack(pady=10)
+
+        subtitle = tk.Label(sidebar, text="Pro + Animations", font=("Arial", 10, "italic"), bg=PANEL_BG, fg="#bfe8ff")
+        subtitle.pack(pady=(0,8))
+
+        # Input
+        in_frame = tk.Frame(sidebar, bg=PANEL_BG)
+        in_frame.pack(pady=6, padx=10, fill=tk.X)
+        tk.Label(in_frame, text="Enter integer:", bg=PANEL_BG, fg="#cfe8ff").pack(anchor="w")
+        self.entry = ttk.Entry(in_frame, width=16)
+        self.entry.pack(pady=6)
+
+        # Buttons helper
+        def add_btn(text, cmd, tooltip=None):
+            btn = tk.Button(sidebar, text=text, command=cmd, bg=BTN_BG, fg=BTN_FG, relief="flat", padx=6, pady=6)
+            btn.pack(fill=tk.X, padx=12, pady=6)
+            if tooltip:
+                ToolTip(btn, tooltip)
+            return btn
+
+        add_btn("Create New BST", self.create_new, "Clear the current tree and start fresh.")
+        add_btn("Insert Node", self.insert_node, "Insert integer from entry box; node will slide into position.")
+        add_btn("Search Key", self.search_node, "Search value and highlight visited path.")
+        add_btn("Delete Node", self.delete_node, "Delete node with animations (fade out).")
+
+        ttk.Separator(sidebar, orient='horizontal').pack(fill=tk.X, padx=8, pady=6)
+        tk.Label(sidebar, text="Traversals", bg=PANEL_BG, fg="#cfe8ff", font=("Arial", 11, "bold")).pack()
+        trav_frame = tk.Frame(sidebar, bg=PANEL_BG)
+        trav_frame.pack(padx=8, pady=6, fill=tk.X)
+        tk.Button(trav_frame, text="Inorder", command=lambda: self.animate_traversal("inorder"), bg=BTN_BG, fg=BTN_FG, relief="flat").pack(side=tk.LEFT, expand=True, fill=tk.X, padx=3)
+        tk.Button(trav_frame, text="Preorder", command=lambda: self.animate_traversal("preorder"), bg=BTN_BG, fg=BTN_FG, relief="flat").pack(side=tk.LEFT, expand=True, fill=tk.X, padx=3)
+        tk.Button(trav_frame, text="Postorder", command=lambda: self.animate_traversal("postorder"), bg=BTN_BG, fg=BTN_FG, relief="flat").pack(side=tk.LEFT, expand=True, fill=tk.X, padx=3)
+        tk.Button(trav_frame, text="Level", command=lambda: self.animate_traversal("level"), bg=BTN_BG, fg=BTN_FG, relief="flat").pack(side=tk.LEFT, expand=True, fill=tk.X, padx=3)
+
+        ttk.Separator(sidebar, orient='horizontal').pack(fill=tk.X, padx=8, pady=6)
+        tk.Label(sidebar, text="Min & Max", bg=PANEL_BG, fg="#cfe8ff", font=("Arial", 11, "bold")).pack()
+        add_btn("Find Minimum", self.find_min, "Find leftmost (minimum) node.")
+        add_btn("Find Maximum", self.find_max, "Find rightmost (maximum) node.")
+
+        ttk.Separator(sidebar, orient='horizontal').pack(fill=tk.X, padx=8, pady=6)
+        tk.Label(sidebar, text="Successor & Predecessor", bg=PANEL_BG, fg="#cfe8ff", font=("Arial", 11, "bold")).pack()
+        add_btn("Find Successor", self.find_successor, "Find inorder successor for given key.")
+        add_btn("Find Predecessor", self.find_predecessor, "Find inorder predecessor for given key.")
+
+        ttk.Separator(sidebar, orient='horizontal').pack(fill=tk.X, padx=8, pady=6)
+        tk.Label(sidebar, text="Properties", bg=PANEL_BG, fg="#cfe8ff", font=("Arial", 11, "bold")).pack()
+        add_btn("Tree Height", self.show_height, "Show tree height.")
+        add_btn("Node Depth", self.show_depth, "Show depth for entered key.")
+        add_btn("Count Nodes", self.show_count_nodes, "Show total nodes.")
+        add_btn("Count Leaves", self.show_count_leaves, "Show total leaves.")
+
+        ttk.Separator(sidebar, orient='horizontal').pack(fill=tk.X, padx=8, pady=6)
+        # quick random / clear
+        add_btn("Random Tree (8 nodes)", lambda: self.random_tree(8), "Generate a random tree for demos.")
+        add_btn("Clear Log", self.clear_log, "Clear step-by-step log.")
+
+        # Right area: canvas + log
+        right = tk.Frame(self, bg=CANVAS_BG)
+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.canvas = tk.Canvas(right, bg=CANVAS_BG, highlightthickness=0)
+        self.canvas.pack(fill=tk.BOTH, expand=True, padx=8, pady=(8,0))
+        self.canvas.bind("<Configure>", lambda e: self.draw_tree())
+
+        # log panel
+        log_frame = tk.Frame(right, bg="#07121a")
+        log_frame.pack(fill=tk.X, padx=8, pady=8)
+        lbl = tk.Label(log_frame, text="Step-by-Step Explanation:", bg="#07121a", fg="#a8f0c2", font=("Arial", 11, "bold"))
+        lbl.pack(anchor="w", padx=6, pady=(6,0))
+        self.log_text = tk.Text(log_frame, height=8, bg="#001218", fg=TEXT_FG, insertbackground=TEXT_FG, font=LOG_FONT)
+        self.log_text.pack(fill=tk.X, padx=6, pady=6)
+        self.log_text.config(state=tk.DISABLED)
+
+        ToolTip(self.entry, "Type an integer value here for operations (insert/search/delete/etc.)")
+
+    # ---------------- Logging ----------------
+    def log(self, lines, prepend=False):
+        self.log_text.config(state=tk.NORMAL)
+        if not prepend:
+            for l in lines:
+                self.log_text.insert(tk.END, l + "\n")
+            self.log_text.see(tk.END)
+        else:
+            existing = self.log_text.get("1.0", tk.END)
+            self.log_text.delete("1.0", tk.END)
+            newtxt = "\n".join(lines) + "\n" + existing
+            self.log_text.insert("1.0", newtxt)
+        self.log_text.config(state=tk.DISABLED)
+
+    def clear_log(self):
+        self.log_text.config(state=tk.NORMAL)
+        self.log_text.delete("1.0", tk.END)
+        self.log_text.config(state=tk.DISABLED)
+
+    # ---------------- UI Actions ----------------
+    def create_new(self):
+        self.bst = BST()
+        self.clear_log()
+        self.log(["Created a new empty BST."])
+        self.draw_tree()
+
+    def insert_node(self):
+        s = self.entry.get().strip()
+        if not s:
+            messagebox.showinfo("Input", "Enter an integer value to insert.")
+            return
+        try:
+            key = int(s)
+        except ValueError:
+            messagebox.showerror("Input", "Please enter an integer.")
+            return
+        self.entry.delete(0, tk.END)
+        steps = self.bst.insert(key)
+        self.log(steps)
+        # draw positions first, then animate new node sliding in
+        self.draw_tree(slide_new_key=key)
+
+    def search_node(self):
+        s = self.entry.get().strip()
+        if not s:
+            messagebox.showinfo("Input", "Enter an integer value to search.")
+            return
+        try:
+            key = int(s)
+        except ValueError:
+            messagebox.showerror("Input", "Please enter an integer.")
+            return
+        self.entry.delete(0, tk.END)
+        found, steps = self.bst.search(key)
+        self.log(steps)
+        # animate visited path then final glow
+        self._animate_search_path(key, found)
+
+    def delete_node(self):
+        s = self.entry.get().strip()
+        if not s:
+            messagebox.showinfo("Input", "Enter an integer value to delete.")
+            return
+        try:
+            key = int(s)
+        except ValueError:
+            messagebox.showerror("Input", "Please enter an integer.")
+            return
+        # Find node object (to animate fade) before deletion
+        node_obj = self._find_node_obj(key)
+        ok, steps = self.bst.delete(key)
+        self.log(steps)
+        if ok:
+            # If node_obj exists on canvas, fade it then redraw after short delay
+            if node_obj and node_obj.gui_circle:
+                self._fade_delete(node_obj, callback=lambda: self.draw_tree())
+            else:
+                # no gui circle present (rare), just redraw
+                self.draw_tree()
+            self.log([f"Deleted {key}."])
+        else:
+            self.log([f"Delete failed: {key} not found."])
+
+    def find_min(self):
+        val, steps = self.bst.find_min()
+        self.log(steps)
+        if val is not None:
+            node = self._find_node_obj(val)
+            if node: self._flash_node(node, color="#7ef9d2", times=3)
+
+    def find_max(self):
+        val, steps = self.bst.find_max()
+        self.log(steps)
+        if val is not None:
+            node = self._find_node_obj(val)
+            if node: self._flash_node(node, color="#7ef9d2", times=3)
+
+    def find_successor(self):
+        s = self.entry.get().strip()
+        if not s:
+            messagebox.showinfo("Input", "Enter integer to find successor.")
+            return
+        try:
+            key = int(s)
+        except ValueError:
+            messagebox.showerror("Input", "Please enter an integer.")
+            return
+        val, steps = self.bst.find_successor(key)
+        self.log(steps)
+        if val is not None:
+            node = self._find_node_obj(val)
+            if node: self._flash_node(node, color="#ffd166", times=3)
+
+    def find_predecessor(self):
+        s = self.entry.get().strip()
+        if not s:
+            messagebox.showinfo("Input", "Enter integer to find predecessor.")
+            return
+        try:
+            key = int(s)
+        except ValueError:
+            messagebox.showerror("Input", "Please enter an integer.")
+            return
+        val, steps = self.bst.find_predecessor(key)
+        self.log(steps)
+        if val is not None:
+            node = self._find_node_obj(val)
+            if node: self._flash_node(node, color="#ffd166", times=3)
+
+    def show_height(self):
+        h = self.bst.height()
+        self.log([f"Tree Height = {h}"])
+
+    def show_depth(self):
+        s = self.entry.get().strip()
+        if not s:
+            messagebox.showinfo("Input", "Enter integer to find depth.")
+            return
+        try:
+            key = int(s)
+        except ValueError:
+            messagebox.showerror("Input", "Please enter an integer.")
+            return
+        d, steps = self.bst.depth(key)
+        self.log(steps)
+        if d is not None:
+            node = self._find_node_obj(key)
+            if node: self._flash_node(node, color="#a78bfa", times=3)
+
+    def show_count_nodes(self):
+        cnt = self.bst.count_nodes()
+        self.log([f"Total Nodes = {cnt}"])
+
+    def show_count_leaves(self):
+        cnt = self.bst.count_leaves()
+        self.log([f"Total Leaves = {cnt}"])
+
+    def random_tree(self, n=8):
+        vals = random.sample(range(1, 100), n)
+        self.bst = BST()
+        for v in vals:
+            self.bst.insert(v)
+        self.log([f"Random tree with values: {vals}"])
+        self.draw_tree()
+
+    # ---------------- Drawing & Layout ----------------
+    def draw_tree(self, initial=False, slide_new_key=None):
+        """
+        initial: when True (app start), draw nodes without sliding effect.
+        slide_new_key: if provided, animate the node with that key sliding in.
+        """
+        # Clear canvas but preserve gui data for nodes that already have gui_circle (so we can reuse)
+        self.canvas.delete("all")
+        root = self.bst.root
+        if not root:
+            return
+
+        # compute inorder positions for x, and level for y
+        inorder = self.bst.inorder_nodes()
+        n = len(inorder)
+        width = max(900, self.canvas.winfo_width())
+        spacing = max(90, width // (n + 1))
+        for i, node in enumerate(inorder):
+            node.x = (i + 1) * spacing
+
+        def set_levels(node, level, y0=100):
+            if not node: return
+            node.level = level
+            node.y = y0 + level * LEVEL_Y_STEP
+            set_levels(node.left, level + 1, y0)
+            set_levels(node.right, level + 1, y0)
+        set_levels(root, 0)
+
+        # draw edges first
+        self._draw_edges(root)
+
+        # draw nodes. If slide_new_key provided, ensure that node.gui_circle is None so insert animation draws it.
+        # For initial startup, draw static nodes.
+        # Draw nodes with existing gui metadata where possible.
+        def draw_all(node):
+            if not node: return
+            # If node already has gui objects and not sliding insert, draw them at node.x,node.y
+            if node.gui_circle and node.gui_text and (slide_new_key is None or node.key != slide_new_key):
+                # Recreate at new coords
+                self._create_node_gui_static(node)
+            else:
+                if initial and (slide_new_key is None):
+                    # initial load: create static node immediately (no slide)
+                    self._create_node_gui_static(node)
+                else:
+                    # leave gui empty here; specific animation functions will paint node
+                    node.gui_circle = None
+                    node.gui_text = None
+            draw_all(node.left)
+            draw_all(node.right)
+
+        draw_all(root)
+
+        # Now, if slide_new_key provided, animate only that node sliding in (others are static).
+        if slide_new_key is not None:
+            target_node = self._find_node_obj(slide_new_key)
+            if target_node:
+                self._animate_insert_node(target_node)
+        else:
+            # if no slide, ensure all nodes appear
+            # For nodes that didn't receive static creation above (e.g., newly loaded), create them statically now
+            def finalize(node):
+                if not node: return
+                if not node.gui_circle:
+                    self._create_node_gui_static(node)
+                finalize(node.left); finalize(node.right)
+            finalize(root)
+
+    def _draw_edges(self, node):
+        if not node: return
+        if node.left:
+            # curved line for nicer look
+            x0, y0 = node.x, node.y
+            x1, y1 = node.left.x, node.left.y
+            ctrlx = (x0 + x1) / 2
+            self.canvas.create_line(x0, y0, ctrlx, (y0 + y1) / 2, x1, y1, smooth=True, width=2, fill="#78A9FF")
+            self._draw_edges(node.left)
+        if node.right:
+            x0, y0 = node.x, node.y
+            x1, y1 = node.right.x, node.right.y
+            ctrlx = (x0 + x1) / 2
+            self.canvas.create_line(x0, y0, ctrlx, (y0 + y1) / 2, x1, y1, smooth=True, width=2, fill="#78A9FF")
+            self._draw_edges(node.right)
+
+    def _create_node_gui_static(self, node):
+        # create a filled circle + label at node.x,node.y
+        r = NODE_RADIUS
+        x, y = node.x, node.y
+        # create halo effect (a faint border) - using another oval with slightly larger radius
+        # draw main circle
+        node.gui_circle = self.canvas.create_oval(x - r, y - r, x + r, y + r, fill=NODE_FILL, outline=NODE_OUTLINE, width=2)
+        node.gui_text = self.canvas.create_text(x, y, text=str(node.key), fill="white", font=("Helvetica", 11, "bold"))
+        # draw level text
+        self.canvas.create_text(x, y + r + 12, text=f"L{node.level}", fill="#b6d4ff", font=("Arial", 8))
+
+    # ---------------- Animations ----------------
+    def _animate_insert_node(self, node):
+        """Slide a new node from top center to its target x,y."""
+        if node is None:
+            return
+        # Starting coords
+        start_x = self.canvas.winfo_width() // 2
+        start_y = 40
+        final_x, final_y = node.x, node.y
+        node.x, node.y = start_x, start_y
+
+        # create GUI items at start position
+        r = NODE_RADIUS
+        node.gui_circle = self.canvas.create_oval(start_x - r, start_y - r, start_x + r, start_y + r, fill=NODE_FILL_ALT, outline=NODE_OUTLINE, width=2)
+        node.gui_text = self.canvas.create_text(start_x, start_y, text=str(node.key), fill="white", font=("Helvetica", 11, "bold"))
+        # dynamic connecting line to parent (if parent exists)
+        parent = self._find_parent(node.key)
+        dynamic_line = None
+        if parent:
+            # draw initial line from parent to moving child
+            dynamic_line = self.canvas.create_line(parent.x, parent.y, start_x, start_y, fill="#78A9FF", width=2, smooth=True)
+
+        steps = INSERT_STEPS
+        dx = (final_x - start_x) / steps
+        dy = (final_y - start_y) / steps
+        i = 0
+
+        def slide():
+            nonlocal i, dynamic_line
+            if i < steps:
+                self.canvas.move(node.gui_circle, dx, dy)
+                self.canvas.move(node.gui_text, dx, dy)
+                node.x += dx
+                node.y += dy
+                if dynamic_line and parent:
+                    # recompute curve to follow moving child
+                    try:
+                        self.canvas.coords(dynamic_line, parent.x, parent.y, (parent.x + node.x) / 2, (parent.y + node.y) / 2, node.x, node.y)
+                    except:
+                        pass
+                i += 1
+                self.after(FRAME_DELAY, slide)
+            else:
+                # final snap to exact coords
+                try:
+                    self.canvas.coords(node.gui_circle, final_x - r, final_y - r, final_x + r, final_y + r)
+                    self.canvas.coords(node.gui_text, final_x, final_y)
+                except:
+                    pass
+                node.x, node.y = final_x, final_y
+                # remove dynamic line (we redraw full edges on next redraw anyway)
+                if dynamic_line:
+                    try:
+                        self.canvas.delete(dynamic_line)
+                    except:
+                        pass
+                # quick highlight flash then set to normal color
+                self._flash_node(node, color="#a8ffeb", times=FLASH_TIMES)
+                # draw level label
+                self.canvas.create_text(final_x, final_y + r + 12, text=f"L{node.level}", fill="#b6d4ff", font=("Arial", 8))
+                # finally redraw entire edges (in case)
+                self._draw_edges(self.bst.root)
+        slide()
+
+    def _flash_node(self, node, color="#ffd166", times=3):
+        if not node or not node.gui_circle:
+            return
+        orig = NODE_FILL
+        def flash(count):
+            if count <= 0:
+                try:
+                    self.canvas.itemconfig(node.gui_circle, fill=orig)
+                except:
+                    pass
+                return
+            try:
+                self.canvas.itemconfig(node.gui_circle, fill=color)
+            except:
+                pass
+            # restore after short time
+            self.after(int(FRAME_DELAY * 0.8), lambda: self.canvas.itemconfig(node.gui_circle, fill=orig))
+            self.after(FRAME_DELAY, lambda: flash(count - 1))
+        flash(times)
+
+    def _fade_delete(self, node, callback=None):
+        """Fade node out by shrinking & changing color, then delete its GUI items."""
+        if not node or not node.gui_circle:
+            if callback:
+                callback()
+            return
+        steps = FADE_STEPS
+        r = NODE_RADIUS
+        def step(i):
+            if i <= 0:
+                try:
+                    self.canvas.delete(node.gui_circle)
+                except:
+                    pass
+                try:
+                    self.canvas.delete(node.gui_text)
+                except:
+                    pass
+                if callback:
+                    callback()
+                return
+            try:
+                # shrink
+                bbox = self.canvas.coords(node.gui_circle)
+                if bbox and len(bbox) == 4:
+                    x0, y0, x1, y1 = bbox
+                    cx = (x0 + x1) / 2
+                    cy = (y0 + y1) / 2
+                    new_r = r * (i / steps)
+                    self.canvas.coords(node.gui_circle, cx - new_r, cy - new_r, cx + new_r, cy + new_r)
+                # color shift
+                self.canvas.itemconfig(node.gui_circle, fill="#f87171")
+            except:
+                pass
+            self.after(FADE_DELAY, lambda: step(i - 1))
+        step(steps)
+
+    # Search animation: highlight visited path then final glow if found
+    def _animate_search_path(self, key, found):
+        path_nodes = []
+        cur = self.bst.root
+        while cur:
+            path_nodes.append(cur)
+            if key == cur.key:
+                break
+            elif key < cur.key:
+                cur = cur.left
+            else:
+                cur = cur.right
+
+        # sequentially highlight path nodes
+        def step(i):
+            if i > 0:
+                prev = path_nodes[i - 1]
+                if prev.gui_circle:
+                    try:
+                        self.canvas.itemconfig(prev.gui_circle, fill=NODE_FILL)
+                        self.canvas.itemconfig(prev.gui_circle, outline=NODE_OUTLINE, width=2)
+                    except:
+                        pass
+            if i >= len(path_nodes):
+                # done
+                if found and path_nodes:
+                    self._flash_node(path_nodes[-1], color="#9be3a8", times=4)
+                return
+            n = path_nodes[i]
+            if n and n.gui_circle:
+                try:
+                    self.canvas.itemconfig(n.gui_circle, fill="#ffd166")
+                    self.canvas.itemconfig(n.gui_circle, outline="#ffd166", width=3)
+                except:
+                    pass
+            self.after(SEARCH_STEP_DELAY, lambda: step(i + 1))
+        # start only if there is at least one node visited
+        if path_nodes:
+            step(0)
+
+    # Traversal animation: highlight nodes one-by-one
+    def animate_traversal(self, kind):
+        nodes = []
+        if kind == "inorder":
+            nodes = self.bst.inorder_nodes()
+        elif kind == "preorder":
+            nodes = [self._find_node_obj(k) for k in self.bst.preorder_vals()]
+        elif kind == "postorder":
+            nodes = [self._find_node_obj(k) for k in self.bst.postorder_vals()]
+        else:
+            nodes = [self._find_node_obj(k) for k in self.bst.level_order_vals()]
+
+        seq = [str(n.key) for n in nodes if n]
+        self.log([f"{kind.capitalize()} traversal: {seq}"])
+        def step(i):
+            if i > 0:
+                prev = nodes[i - 1]
+                if prev and prev.gui_circle:
+                    try:
+                        self.canvas.itemconfig(prev.gui_circle, fill=NODE_FILL)
+                    except:
+                        pass
+            if i >= len(nodes):
+                return
+            n = nodes[i]
+            if n and n.gui_circle:
+                try:
+                    self.canvas.itemconfig(n.gui_circle, fill="#c7f9cc")
+                except:
+                    pass
+            self.after(TRAVERSAL_STEP_DELAY, lambda: step(i + 1))
+        if nodes:
+            step(0)
+
+    # ---------------- Helpers ----------------
+    def _find_node_obj(self, key):
+        cur = self.bst.root
+        while cur:
+            if cur.key == key:
+                return cur
+            elif key < cur.key:
+                cur = cur.left
+            else:
+                cur = cur.right
+        return None
+
+    def _find_parent(self, key):
+        parent = None
+        cur = self.bst.root
+        while cur and cur.key != key:
+            parent = cur
+            if key < cur.key:
+                cur = cur.left
+            else:
+                cur = cur.right
+        return parent
+
+# ---------------- Run App ----------------
+if __name__ == "__main__":
+    app = VisualBSTApp()
+    app.mainloop()
